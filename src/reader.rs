@@ -427,20 +427,22 @@ pub fn view<'a>(s: &'a State, cfg: &Config, standalone: bool) -> Element<'a, Msg
         let book: Element<'a, Msg> = responsive(move |size: Size| -> Element<'a, Msg> {
             if scroll {
                 // vertical scrolling: ~8k-char chunks; hitting the bottom loads the next one
-                let col_w = (size.width - 48.0).clamp(200.0, 720.0);
+                let sheet_pad = 32.0_f32;
+                let col_w = (size.width - 48.0 - sheet_pad * 2.0).clamp(200.0, 720.0);
                 let end = page_end(&s.text, s.pos, 8000);
                 s.cap.set(8000);
                 s.span.set(end - s.pos);
                 let chunk = s.text[s.pos..end].trim().to_string();
-                let content = container(
+                let sheet = container(
                     text(chunk)
                         .font(font)
                         .size(sz)
                         .line_height(1.6)
                         .width(col_w),
                 )
-                .padding(24)
-                .center_x(Length::Fill);
+                .padding(sheet_pad)
+                .style(paper);
+                let content = container(sheet).padding(24).center_x(Length::Fill);
                 let sc = scrollable(content)
                     .on_scroll(|v| {
                         Msg::Scrolled(

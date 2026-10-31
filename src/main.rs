@@ -19,7 +19,7 @@ use meta::{Meta, Store};
 use std::path::PathBuf;
 
 /// 1rem
-const R: f32 = 16.0;
+const R: f32 = 6.0;
 
 fn main() -> iced::Result {
     iced::application(App::new, App::update, App::view)
