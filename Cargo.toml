@@ -1,0 +1,20 @@
+[package]
+name = "readru"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Light ebook library manager and reader"
+
+[dependencies]
+iced = "0.14"
+rfd = "0.15"          # native folder dialog (uses xdg-desktop-portal -> KDE dialog)
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+dirs = "5"
+walkdir = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+roxmltree = "0.21.2"
+
+[profile.release]
+lto = "thin"
+strip = true
