@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=readru Reader
+GenericName=Ebook Reader
+Comment=Open a book in the standalone readru reader
+Exec=readru --reader %f
+Icon=readru
+Terminal=false
+Categories=Office;Viewer;Literature;
+MimeType=application/epub+zip;application/pdf;text/plain;
+StartupWMClass=readru

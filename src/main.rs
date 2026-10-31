@@ -6,7 +6,7 @@ mod reader;
 mod tests;
 mod theme;
 
-use config::{Config, PageMode, ReaderFont};
+use config::{Config, PageMode, ReadDir, ReadMode, ReaderFont};
 use iced::widget::{
     button, column, container, mouse_area, pick_list, row, scrollable, stack, text, text_input,
     Column, Row,
@@ -23,7 +23,7 @@ const R: f32 = 16.0;
 
 fn main() -> iced::Result {
     iced::application(App::new, App::update, App::view)
-        .title("readru")
+        .title(App::title)
         .theme(App::theme)
         .subscription(App::subscription)
         .run()
@@ -101,6 +101,7 @@ struct App {
     menu: Option<(usize, Point)>,
     modal: Option<Modal>,
     reader: Option<reader::State>,
+    standalone: bool, // `readru --reader book.epub`: closing the reader quits
 }
 
 #[derive(Debug, Clone)]
@@ -117,6 +118,8 @@ enum Msg {
     FontChosen(ReaderFont),
     FontSize(i16),
     PageModeChosen(PageMode),
+    DirChosen(ReadDir),
+    ModeChosen(ReadMode),
     OpenSettings,
     OpenBook(usize),
     Reader(reader::Msg),
@@ -277,14 +280,13 @@ fn section(label: &'static str) -> Element<'static, Msg> {
 impl App {
     fn new() -> (Self, Task<Msg>) {
         let cfg = Config::load();
-        let task = cfg
-            .library
-            .clone()
-            .map(scan_task)
-            .unwrap_or_else(Task::none);
-        // `readru book.epub` opens the reader directly
-        let reader = std::env::args()
-            .nth(1)
+        // `readru book.epub` opens the reader, closing it shows the library.
+        // `readru --reader book.epub` is the standalone reader: no library, closing quits.
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        let flag = args.iter().any(|a| a == "--reader");
+        let reader = args
+            .iter()
+            .find(|a| !a.starts_with("--"))
             .map(PathBuf::from)
             .filter(|p| p.is_file())
             .map(|p| {
@@ -294,6 +296,15 @@ impl App {
                     .unwrap_or_default();
                 reader::State::open(&p, &t)
             });
+        let standalone = flag && reader.is_some();
+        let task = if standalone {
+            Task::none()
+        } else {
+            cfg.library
+                .clone()
+                .map(scan_task)
+                .unwrap_or_else(Task::none)
+        };
         let app = Self {
             cfg,
             store: Store::default(),
@@ -305,8 +316,16 @@ impl App {
             menu: None,
             modal: None,
             reader,
+            standalone,
         };
         (app, task)
+    }
+
+    fn title(&self) -> String {
+        match &self.reader {
+            Some(r) => format!("{} — readru", r.title),
+            None => "readru".to_string(),
+        }
     }
 
     fn theme(&self) -> Theme {
@@ -326,12 +345,12 @@ impl App {
             }
             match event {
                 iced::Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => match key {
-                    keyboard::Key::Named(Named::ArrowRight | Named::PageDown) => {
-                        Some(Msg::Reader(reader::Msg::Next))
+                    keyboard::Key::Named(Named::ArrowRight) => {
+                        Some(Msg::Reader(reader::Msg::Right))
                     }
-                    keyboard::Key::Named(Named::ArrowLeft | Named::PageUp) => {
-                        Some(Msg::Reader(reader::Msg::Prev))
-                    }
+                    keyboard::Key::Named(Named::ArrowLeft) => Some(Msg::Reader(reader::Msg::Left)),
+                    keyboard::Key::Named(Named::PageDown) => Some(Msg::Reader(reader::Msg::Next)),
+                    keyboard::Key::Named(Named::PageUp) => Some(Msg::Reader(reader::Msg::Prev)),
                     keyboard::Key::Named(Named::Escape) => Some(Msg::Escape),
                     _ => None,
                 },
@@ -445,6 +464,14 @@ impl App {
                 self.cfg.page_mode = m;
                 self.cfg.save();
             }
+            Msg::DirChosen(d) => {
+                self.cfg.read_dir = d;
+                self.cfg.save();
+            }
+            Msg::ModeChosen(d) => {
+                self.cfg.read_mode = d;
+                self.cfg.save();
+            }
             Msg::OpenSettings => {
                 self.menu = None;
                 self.modal = Some(Modal::Settings);
@@ -456,20 +483,58 @@ impl App {
                     self.reader = Some(reader::State::open(&b.path, &b.title));
                 }
             }
-            Msg::Reader(m) => match m {
-                reader::Msg::Close => self.reader = None,
-                reader::Msg::Settings => self.modal = Some(Modal::Settings),
-                reader::Msg::Next => {
-                    if let Some(r) = &mut self.reader {
-                        r.next();
+            Msg::Reader(m) => {
+                let rtl = self.cfg.read_dir == ReadDir::Rtl;
+                match m {
+                    reader::Msg::Close => {
+                        if self.standalone {
+                            return iced::exit();
+                        }
+                        self.reader = None;
+                    }
+                    reader::Msg::Settings => self.modal = Some(Modal::Settings),
+                    reader::Msg::ToggleDir => {
+                        self.cfg.read_dir = if rtl { ReadDir::Ltr } else { ReadDir::Rtl };
+                        self.cfg.save();
+                    }
+                    reader::Msg::Next => {
+                        if let Some(r) = &mut self.reader {
+                            r.next();
+                        }
+                    }
+                    reader::Msg::Prev => {
+                        if let Some(r) = &mut self.reader {
+                            r.prev();
+                        }
+                    }
+                    // physical left/right: manga mode swaps what they mean
+                    reader::Msg::Left => {
+                        if let Some(r) = &mut self.reader {
+                            if rtl {
+                                r.next()
+                            } else {
+                                r.prev()
+                            }
+                        }
+                    }
+                    reader::Msg::Right => {
+                        if let Some(r) = &mut self.reader {
+                            if rtl {
+                                r.prev()
+                            } else {
+                                r.next()
+                            }
+                        }
+                    }
+                    reader::Msg::Scrolled(at_bottom) => {
+                        if at_bottom {
+                            if let Some(r) = &mut self.reader {
+                                r.next();
+                            }
+                        }
                     }
                 }
-                reader::Msg::Prev => {
-                    if let Some(r) = &mut self.reader {
-                        r.prev();
-                    }
-                }
-            },
+            }
             Msg::Cursor(p) => self.cursor = p,
             Msg::Hover(h) => self.hover = h,
             Msg::Context(i) => self.menu = Some((i, self.cursor)),
@@ -585,7 +650,7 @@ impl App {
 
     fn view(&self) -> Element<'_, Msg> {
         let base: Element<'_, Msg> = if let Some(r) = &self.reader {
-            reader::view(r, &self.cfg).map(Msg::Reader)
+            reader::view(r, &self.cfg, self.standalone).map(Msg::Reader)
         } else if self.cfg.library.is_none() {
             container(
                 column![
@@ -807,6 +872,17 @@ impl App {
             row![
                 text("Pages").width(Length::Fill),
                 pick_list(PageMode::ALL, Some(self.cfg.page_mode), Msg::PageModeChosen)
+                    .style(pick_style),
+            ]
+            .align_y(iced::Center),
+            row![
+                text("Direction").width(Length::Fill),
+                pick_list(ReadDir::ALL, Some(self.cfg.read_dir), Msg::DirChosen).style(pick_style),
+            ]
+            .align_y(iced::Center),
+            row![
+                text("Mode").width(Length::Fill),
+                pick_list(ReadMode::ALL, Some(self.cfg.read_mode), Msg::ModeChosen)
                     .style(pick_style),
             ]
             .align_y(iced::Center),

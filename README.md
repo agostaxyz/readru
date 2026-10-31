@@ -19,7 +19,7 @@ Scans a folder for EPUB, PDF and TXT. Sort by title, author, publisher, date pub
 
 ### 📖 Reader
 
-EPUB and TXT, single or two-page view, font and size settings (OpenDyslexic if installed), and it remembers where you stopped. Run it standalone with `readru book.epub`.
+EPUB and TXT on A-series proportioned pages, centered like a real book. Single page or a two-page spread, click the left/right side to turn pages, manga mode (right-to-left), or vertical scrolling. Font and size settings (OpenDyslexic if installed), and it remembers where you stopped. Run it standalone with `readru book.epub`.
 
 ### 🎨 Themes
 
@@ -33,6 +33,11 @@ cargo run --release
 ```
 
 On first launch it asks for your library folder (existing or new). Change it any time in Settings.
+
+## Open with
+
+`readru book.epub` opens the book (closing it shows the library). `readru --reader book.epub` is the standalone reader: no library, closing quits.
+Install the desktop entries in `packaging/` and both show up in your file manager's "Open with" menu for EPUB, PDF and TXT.
 
 ## Custom themes
 

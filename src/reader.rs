@@ -1,7 +1,9 @@
-use crate::config::{Config, PageMode, ReaderFont};
-use crate::{pill, soft};
-use iced::widget::{button, column, container, responsive, row, text, Row};
-use iced::{font, Element, Font, Length, Size};
+use crate::config::{Config, PageMode, ReadDir, ReadMode, ReaderFont};
+use crate::soft;
+use iced::widget::{
+    button, column, container, keyed, mouse_area, responsive, row, scrollable, stack, text, Row,
+};
+use iced::{font, Border, Color, Element, Font, Length, Shadow, Size, Theme, Vector};
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::collections::BTreeMap;
@@ -11,10 +13,14 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
 pub enum Msg {
-    Next,
-    Prev,
+    Next,  // logical: PageDown
+    Prev,  // logical: PageUp
+    Left,  // physical: left click zone / left arrow
+    Right, // physical: right click zone / right arrow
     Close,
     Settings,
+    ToggleDir,
+    Scrolled(bool), // scroll mode: reached the bottom of the chunk
 }
 
 pub struct State {
@@ -330,7 +336,46 @@ impl State {
 
 // ---------- view ----------
 
-pub fn view<'a>(s: &'a State, cfg: &Config) -> Element<'a, Msg> {
+/// A-series paper (A4, A5, ...) is always 1 : sqrt(2)
+const RATIO: f32 = std::f32::consts::SQRT_2;
+
+fn paper(t: &Theme) -> container::Style {
+    let p = t.extended_palette();
+    container::Style {
+        background: Some(p.background.weak.color.into()),
+        border: Border {
+            color: p.background.strong.color,
+            width: 1.0,
+            radius: 6.0_f32.into(),
+        },
+        text_color: Some(p.background.weak.text),
+        shadow: Shadow {
+            color: Color {
+                a: 0.4,
+                ..Color::BLACK
+            },
+            offset: Vector::new(0.0, 8.0),
+            blur_radius: 28.0,
+        },
+        ..Default::default()
+    }
+}
+
+/// Invisible click zones: left 30% = left, right 70% = right.
+fn zones<'a>() -> Element<'a, Msg> {
+    let zone = |msg: Msg, portion: u16| {
+        mouse_area(
+            container(text(""))
+                .width(Length::FillPortion(portion))
+                .height(Length::Fill),
+        )
+        .on_press(msg)
+        .interaction(iced::mouse::Interaction::Pointer)
+    };
+    row![zone(Msg::Left, 3), zone(Msg::Right, 7)].into()
+}
+
+pub fn view<'a>(s: &'a State, cfg: &Config, standalone: bool) -> Element<'a, Msg> {
     let font = match cfg.reader_font {
         ReaderFont::Serif => Font {
             family: font::Family::Serif,
@@ -344,7 +389,9 @@ pub fn view<'a>(s: &'a State, cfg: &Config) -> Element<'a, Msg> {
         ReaderFont::OpenDyslexic => Font::with_name("OpenDyslexic"),
     };
     let sz = cfg.reader_size as f32;
-    let cols: usize = if cfg.page_mode == PageMode::Double {
+    let rtl = cfg.read_dir == ReadDir::Rtl;
+    let scroll = cfg.read_mode == ReadMode::Scroll;
+    let cols: usize = if cfg.page_mode == PageMode::Double && !scroll {
         2
     } else {
         1
@@ -355,60 +402,132 @@ pub fn view<'a>(s: &'a State, cfg: &Config) -> Element<'a, Msg> {
         s.pos * 100 / s.text.len()
     };
 
+    let header = row![
+        button(if standalone {
+            "✕ Close"
+        } else {
+            "← Library"
+        })
+        .on_press(Msg::Close)
+        .style(soft),
+        text(s.title.as_str()).size(16).width(Length::Fill),
+        text(format!("{pct}%")).size(14),
+        button(if rtl { "R→L" } else { "L→R" })
+            .on_press(Msg::ToggleDir)
+            .style(soft),
+        button("⚙").on_press(Msg::Settings).style(soft),
+    ]
+    .spacing(12)
+    .padding(12)
+    .align_y(iced::Center);
+
     let body: Element<'a, Msg> = if let Some(e) = &s.error {
         container(text(e.as_str())).center(Length::Fill).into()
     } else {
-        responsive(move |size: Size| -> Element<'a, Msg> {
-            let (gap, pad) = (32.0_f32, 48.0_f32);
-            let col_w =
-                ((size.width - pad * 2.0 - gap * (cols as f32 - 1.0)) / cols as f32).max(200.0);
-            let h = (size.height - pad).max(100.0);
-            let per_line = (col_w / (sz * 0.5)).floor();
-            let lines = (h / (sz * 1.45)).floor();
-            let cap = ((per_line * lines) * 0.8).max(50.0) as usize;
+        let book: Element<'a, Msg> = responsive(move |size: Size| -> Element<'a, Msg> {
+            if scroll {
+                // vertical scrolling: ~8k-char chunks; hitting the bottom loads the next one
+                let col_w = (size.width - 48.0).clamp(200.0, 720.0);
+                let end = page_end(&s.text, s.pos, 8000);
+                s.cap.set(8000);
+                s.span.set(end - s.pos);
+                let chunk = s.text[s.pos..end].trim().to_string();
+                let content = container(
+                    text(chunk)
+                        .font(font)
+                        .size(sz)
+                        .line_height(1.6)
+                        .width(col_w),
+                )
+                .padding(24)
+                .center_x(Length::Fill);
+                let sc = scrollable(content)
+                    .on_scroll(|v| {
+                        Msg::Scrolled(
+                            v.absolute_offset().y + v.bounds().height
+                                >= v.content_bounds().height - 4.0,
+                        )
+                    })
+                    .width(Length::Fill)
+                    .height(Length::Fill);
+                // keyed by position: a new chunk gets a fresh scrollable (back at the top)
+                return keyed::Column::with_children(vec![(s.pos, Element::from(sc))])
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into();
+            }
+
+            let margin = 24.0_f32;
+            let avail_w = (size.width - margin * 2.0).max(200.0);
+            let avail_h = (size.height - margin * 2.0).max(200.0);
+            let n = cols as f32;
+            let (mut page_w, mut page_h) = (avail_h / RATIO, avail_h);
+            if page_w * n > avail_w {
+                page_w = avail_w / n;
+                page_h = page_w * RATIO;
+            }
+            let pad = page_w * 0.1;
+            let (tw, th) = (
+                (page_w - pad * 2.0).max(100.0),
+                (page_h - pad * 2.0).max(100.0),
+            );
+            let cap =
+                (((tw / (sz * 0.5)).floor() * (th / (sz * 1.45)).floor()) * 0.8).max(50.0) as usize;
 
             let mut start = s.pos;
-            let mut pages: Vec<Element<'a, Msg>> = Vec::new();
+            let mut texts: Vec<String> = Vec::new();
             for _ in 0..cols {
                 let end = page_end(&s.text, start, cap);
-                let body = s.text[start..end].trim().to_string();
-                pages.push(
-                    container(text(body).font(font).size(sz).line_height(1.45))
-                        .width(col_w)
-                        .height(h)
-                        .clip(true)
-                        .into(),
-                );
+                texts.push(s.text[start..end].trim().to_string());
                 start = end;
             }
             s.cap.set(cap);
             s.span.set(start - s.pos);
-            container(Row::with_children(pages).spacing(gap))
-                .padding(pad / 2.0)
-                .center_x(Length::Fill)
+            if rtl {
+                texts.reverse(); // manga: first page on the right
+            }
+
+            let mut spread: Vec<Element<'a, Msg>> = Vec::new();
+            for (i, body) in texts.into_iter().enumerate() {
+                if i > 0 {
+                    // spine
+                    spread.push(
+                        container(text(""))
+                            .width(1.0)
+                            .height(page_h)
+                            .style(|t: &Theme| container::Style {
+                                background: Some(
+                                    t.extended_palette().background.strong.color.into(),
+                                ),
+                                ..Default::default()
+                            })
+                            .into(),
+                    );
+                }
+                spread.push(
+                    container(
+                        container(text(body).font(font).size(sz).line_height(1.45))
+                            .width(tw)
+                            .height(th)
+                            .clip(true),
+                    )
+                    .padding(pad)
+                    .width(page_w)
+                    .height(page_h)
+                    .into(),
+                );
+            }
+            container(container(Row::with_children(spread)).style(paper))
+                .center(Length::Fill)
                 .into()
         })
-        .into()
+        .into();
+        if scroll {
+            book
+        } else {
+            stack![book, zones()].into()
+        }
     };
 
-    column![
-        row![
-            button("← Library").on_press(Msg::Close).style(soft),
-            text(s.title.as_str()).size(16).width(Length::Fill),
-            button("⚙").on_press(Msg::Settings).style(soft),
-        ]
-        .spacing(12)
-        .padding(12)
-        .align_y(iced::Center),
-        body,
-        row![
-            button("‹ Prev").on_press(Msg::Prev).style(soft),
-            container(text(format!("{pct}%"))).center_x(Length::Fill),
-            button("Next ›").on_press(Msg::Next).style(pill),
-        ]
-        .spacing(12)
-        .padding(12)
-        .align_y(iced::Center),
-    ]
-    .into()
+    column![header, body].into()
 }
