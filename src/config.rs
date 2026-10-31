@@ -3,6 +3,46 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ReadDir {
+    #[default]
+    Ltr,
+    Rtl,
+}
+
+impl ReadDir {
+    pub const ALL: [ReadDir; 2] = [ReadDir::Ltr, ReadDir::Rtl];
+}
+
+impl fmt::Display for ReadDir {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            ReadDir::Ltr => "Left to right",
+            ReadDir::Rtl => "Right to left",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ReadMode {
+    #[default]
+    Paged,
+    Scroll,
+}
+
+impl ReadMode {
+    pub const ALL: [ReadMode; 2] = [ReadMode::Paged, ReadMode::Scroll];
+}
+
+impl fmt::Display for ReadMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            ReadMode::Paged => "Paged",
+            ReadMode::Scroll => "Scroll",
+        })
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub enum ReaderFont {
     #[default]
@@ -62,6 +102,10 @@ pub struct Config {
     pub reader_font: ReaderFont,
     pub reader_size: u16,
     pub page_mode: PageMode,
+    #[serde(default)]
+    pub read_dir: ReadDir,
+    #[serde(default)]
+    pub read_mode: ReadMode,
 }
 
 impl Default for Config {
@@ -74,6 +118,8 @@ impl Default for Config {
             reader_font: ReaderFont::Serif,
             reader_size: 18,
             page_mode: PageMode::Single,
+            read_dir: ReadDir::default(),
+            read_mode: ReadMode::default(),
         }
     }
 }
