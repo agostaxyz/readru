@@ -13,30 +13,42 @@ struct Raw {
 }
 
 const BUILTIN: [(&str, &str); 4] = [
-    ("sharu-dark", r##"background="#0b120e"
+    (
+        "sharu-dark",
+        r##"background="#0b120e"
 text="#e6f0e9"
 primary="#3fb950"
 success="#3fb950"
 warning="#d29922"
-danger="#f85149""##),
-    ("github-dark", r##"background="#0d1117"
+danger="#f85149""##,
+    ),
+    (
+        "github-dark",
+        r##"background="#0d1117"
 text="#e6edf3"
 primary="#1f6feb"
 success="#3fb950"
 warning="#d29922"
-danger="#f85149""##),
-    ("github-dark-dimmed", r##"background="#22272e"
+danger="#f85149""##,
+    ),
+    (
+        "github-dark-dimmed",
+        r##"background="#22272e"
 text="#adbac7"
 primary="#539bf5"
 success="#57ab5a"
 warning="#c69026"
-danger="#e5534b""##),
-    ("github-light", r##"background="#ffffff"
+danger="#e5534b""##,
+    ),
+    (
+        "github-light",
+        r##"background="#ffffff"
 text="#1f2328"
 primary="#0969da"
 success="#1a7f37"
 warning="#9a6700"
-danger="#d1242f""##),
+danger="#d1242f""##,
+    ),
 ];
 
 fn hex(s: &str) -> Option<Color> {
@@ -81,8 +93,13 @@ pub fn load_all() -> Vec<(String, Theme)> {
                 if p.extension().and_then(|x| x.to_str()) != Some("toml") {
                     continue;
                 }
-                let Some(name) = p.file_stem().and_then(|s| s.to_str()) else { continue };
-                if let Some(t) = std::fs::read_to_string(&p).ok().and_then(|s| build(name, &s)) {
+                let Some(name) = p.file_stem().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                if let Some(t) = std::fs::read_to_string(&p)
+                    .ok()
+                    .and_then(|s| build(name, &s))
+                {
                     v.retain(|(n, _)| n != name);
                     v.push((name.to_string(), t));
                 }

@@ -13,8 +13,12 @@ pub enum ReaderFont {
 }
 
 impl ReaderFont {
-    pub const ALL: &'static [ReaderFont] =
-        &[ReaderFont::Serif, ReaderFont::Sans, ReaderFont::Mono, ReaderFont::OpenDyslexic];
+    pub const ALL: &'static [ReaderFont] = &[
+        ReaderFont::Serif,
+        ReaderFont::Sans,
+        ReaderFont::Mono,
+        ReaderFont::OpenDyslexic,
+    ];
 }
 
 impl fmt::Display for ReaderFont {

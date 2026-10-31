@@ -65,7 +65,10 @@ fn parse_name(stem: &str) -> (String, Vec<String>) {
     match stem.split_once(" - ") {
         Some((a, t)) => (
             t.trim().to_string(),
-            a.split(['&', '+', ';']).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+            a.split(['&', '+', ';'])
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
         ),
         None => (stem.to_string(), vec![]),
     }
@@ -108,7 +111,10 @@ fn read_epub(path: &Path) -> Option<EpubMeta> {
         title: all("title").into_iter().next(),
         authors: all("creator"),
         publisher: all("publisher").into_iter().next(),
-        published: all("date").into_iter().next().map(|d| d.chars().take(10).collect()),
+        published: all("date")
+            .into_iter()
+            .next()
+            .map(|d| d.chars().take(10).collect()),
     })
 }
 
@@ -157,7 +163,11 @@ pub fn scan(root: &Path, store: &Store) -> Vec<Book> {
                     published = m.published;
                 }
             }
-            let rel = p.strip_prefix(root).unwrap_or(p).to_string_lossy().into_owned();
+            let rel = p
+                .strip_prefix(root)
+                .unwrap_or(p)
+                .to_string_lossy()
+                .into_owned();
             let mut b = Book {
                 path: p.to_path_buf(),
                 rel,
@@ -179,12 +189,21 @@ pub fn scan(root: &Path, store: &Store) -> Vec<Book> {
 
 pub fn sort(books: &mut [Book], key: SortKey, asc: bool) {
     const LAST: &str = "\u{10ffff}"; // missing values sort to the end
-    let opt = |o: &Option<String>| o.as_ref().map(|s| s.to_lowercase()).unwrap_or_else(|| LAST.into());
+    let opt = |o: &Option<String>| {
+        o.as_ref()
+            .map(|s| s.to_lowercase())
+            .unwrap_or_else(|| LAST.into())
+    };
     books.sort_by(|a, b| {
         let o = match key {
             SortKey::Title => a.title.to_lowercase().cmp(&b.title.to_lowercase()),
             SortKey::Author => {
-                let f = |b: &Book| b.authors.first().map(|s| s.to_lowercase()).unwrap_or_else(|| LAST.into());
+                let f = |b: &Book| {
+                    b.authors
+                        .first()
+                        .map(|s| s.to_lowercase())
+                        .unwrap_or_else(|| LAST.into())
+                };
                 f(a).cmp(&f(b))
             }
             SortKey::Published => opt(&a.published).cmp(&opt(&b.published)),
@@ -193,6 +212,10 @@ pub fn sort(books: &mut [Book], key: SortKey, asc: bool) {
             SortKey::Size => a.size.cmp(&b.size),
             SortKey::Format => a.format.cmp(&b.format),
         };
-        if asc { o } else { o.reverse() }
+        if asc {
+            o
+        } else {
+            o.reverse()
+        }
     });
 }
