@@ -1,15 +1,21 @@
 use crate::config::{Config, PageMode, ReadDir, ReadMode, ReaderFont};
 use crate::soft;
+use hayro::hayro_interpret::InterpreterSettings;
+use hayro::hayro_syntax::Pdf;
+use hayro::vello_cpu::color::palette::css::WHITE;
+use hayro::{render, PixmapSettings, RenderCache, RenderSettings};
 use iced::widget::{
-    button, column, container, keyed, mouse_area, responsive, row, scrollable, stack, text, Row,
+    button, column, container, image, keyed, mouse_area, responsive, row, scrollable, stack, text,
+    Row,
 };
 use iced::{font, Border, Color, Element, Font, Length, Shadow, Size, Theme, Vector};
 use serde::{Deserialize, Serialize};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub enum Msg {
@@ -30,7 +36,9 @@ pub struct State {
     pos: usize, // byte offset of the current page start: survives font/size/window changes
     error: Option<String>,
     cap: Cell<usize>,  // chars per page, set by the last render
-    span: Cell<usize>, // bytes shown by the last render
+    span: Cell<usize>, // bytes (text) or pages (PDF) shown by the last render
+    pdf: Option<Pdf>,  // set for PDFs: `pos` is then a page index and `text` stays empty
+    spread: RefCell<Option<Spread>>,
 }
 
 // ---------- progress ----------
@@ -128,9 +136,23 @@ fn load(path: &Path) -> Result<String, String> {
         Some("epub") => epub_text(path)
             .filter(|t| !t.trim().is_empty())
             .ok_or_else(|| "Could not read this EPUB".into()),
-        Some("pdf") => Err("PDF reading arrives with the MuPDF step.".into()),
         _ => Err("Unsupported format".into()),
     }
+}
+
+fn is_pdf(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+}
+
+fn load_pdf(path: &Path) -> Result<Pdf, String> {
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let pdf = Pdf::new(Arc::new(bytes)).map_err(|_| "Could not read this PDF".to_string())?;
+    if pdf.pages().len() == 0 {
+        return Err("This PDF has no pages".into());
+    }
+    Ok(pdf)
 }
 
 fn push_ws(out: &mut String) {
@@ -282,18 +304,30 @@ pub fn page_end(t: &str, start: usize, cap: usize) -> usize {
 
 impl State {
     pub fn open(path: &Path, title: &str) -> Self {
-        let (text, error) = match load(path) {
-            Ok(t) => (t, None),
-            Err(e) => (String::new(), Some(e)),
+        let (text, pdf, error) = if is_pdf(path) {
+            match load_pdf(path) {
+                Ok(p) => (String::new(), Some(p), None),
+                Err(e) => (String::new(), None, Some(e)),
+            }
+        } else {
+            match load(path) {
+                Ok(t) => (t, None, None),
+                Err(e) => (String::new(), None, Some(e)),
+            }
         };
+        let limit = pdf
+            .as_ref()
+            .map_or(text.len(), |p| p.pages().len().saturating_sub(1));
         let mut pos = load_progress()
             .pos
             .get(path.to_string_lossy().as_ref())
             .copied()
             .unwrap_or(0)
-            .min(text.len());
-        while !text.is_char_boundary(pos) {
-            pos -= 1;
+            .min(limit);
+        if pdf.is_none() {
+            while !text.is_char_boundary(pos) {
+                pos -= 1;
+            }
         }
         Self {
             title: title.to_string(),
@@ -303,12 +337,29 @@ impl State {
             error,
             cap: Cell::new(0),
             span: Cell::new(0),
+            pdf,
+            spread: RefCell::new(None),
+        }
+    }
+
+    fn percent(&self) -> usize {
+        match &self.pdf {
+            Some(p) => {
+                let n = p.pages().len().max(1);
+                (self.pos + self.span.get()).min(n) * 100 / n
+            }
+            None if self.text.is_empty() => 0,
+            None => self.pos * 100 / self.text.len(),
         }
     }
 
     pub fn next(&mut self) {
         let span = self.span.get();
-        if span > 0 && self.pos + span < self.text.len() {
+        let end = self
+            .pdf
+            .as_ref()
+            .map_or(self.text.len(), |p| p.pages().len());
+        if span > 0 && self.pos + span < end {
             self.pos += span;
             save_pos(&self.path, self.pos);
         }
@@ -316,6 +367,11 @@ impl State {
 
     pub fn prev(&mut self) {
         if self.pos == 0 {
+            return;
+        }
+        if self.pdf.is_some() {
+            self.pos = self.pos.saturating_sub(self.span.get().max(1));
+            save_pos(&self.path, self.pos);
             return;
         }
         let step = self.span.get().max(200);
@@ -361,6 +417,82 @@ fn paper(t: &Theme) -> container::Style {
     }
 }
 
+/// PDF pages are rasterised at this multiple of their on-screen size: crisp on HiDPI,
+/// smoothly downscaled on 1x screens.
+const SUPERSAMPLE: f32 = 2.0;
+
+/// Rasterised pages of the current spread; re-rendered only when the pages or the fit step change.
+struct Spread {
+    key: (usize, usize, u32),
+    handles: Vec<image::Handle>,
+}
+
+fn render_page(pdf: &Pdf, index: usize, scale: f32) -> image::Handle {
+    let pixmap = render(
+        &pdf.pages()[index],
+        &RenderCache::new(),
+        &InterpreterSettings::default(),
+        &RenderSettings::default(),
+        &PixmapSettings {
+            x_scale: scale,
+            y_scale: scale,
+            bg_color: WHITE,
+        },
+    );
+    image::Handle::from_rgba(
+        pixmap.width() as u32,
+        pixmap.height() as u32,
+        pixmap.data_as_u8_slice().to_vec(),
+    )
+}
+
+/// PDF pages sit edge to edge (no padding, no spine) so double-page art stays continuous.
+fn pdf_spread<'a>(s: &State, pdf: &Pdf, size: Size, cols: usize, rtl: bool) -> Element<'a, Msg> {
+    let pages = pdf.pages();
+    let first = s.pos.min(pages.len() - 1);
+    let shown = cols.min(pages.len() - first);
+    let dims: Vec<(f32, f32)> = (first..first + shown)
+        .map(|i| pages[i].render_dimensions())
+        .collect();
+    let total_w = dims.iter().map(|d| d.0).sum::<f32>().max(1.0);
+    let max_h = dims.iter().map(|d| d.1).fold(1.0_f32, f32::max);
+    let margin = 24.0_f32;
+    let fit = ((size.width - margin * 2.0) / total_w)
+        .min((size.height - margin * 2.0) / max_h)
+        .max(0.05);
+
+    // render scale moves in 1/8 steps so dragging the window edge doesn't re-render every frame
+    let step = (fit * SUPERSAMPLE * 8.0).ceil() as u32;
+    let key = (first, shown, step);
+    let mut cache = s.spread.borrow_mut();
+    if cache.as_ref().map(|c| c.key) != Some(key) {
+        let scale = step as f32 / 8.0;
+        let handles = (first..first + shown)
+            .map(|i| render_page(pdf, i, scale))
+            .collect();
+        *cache = Some(Spread { key, handles });
+    }
+    s.span.set(shown);
+
+    let mut items: Vec<(image::Handle, f32, f32)> = cache
+        .iter()
+        .flat_map(|c| c.handles.iter().cloned())
+        .zip(&dims)
+        .map(|(h, d)| (h, d.0 * fit, d.1 * fit))
+        .collect();
+    if rtl {
+        items.reverse();
+    }
+    let spread_row = Row::with_children(
+        items
+            .into_iter()
+            .map(|(h, w, ht)| Element::from(image(h).width(w).height(ht))),
+    );
+    container(container(spread_row).clip(true).style(paper))
+        .center(Length::Fill)
+        .into()
+}
+
 /// Invisible click zones: left 30% = left, right 70% = right.
 fn zones<'a>() -> Element<'a, Msg> {
     let zone = |msg: Msg, portion: u16| {
@@ -390,17 +522,13 @@ pub fn view<'a>(s: &'a State, cfg: &Config, standalone: bool) -> Element<'a, Msg
     };
     let sz = cfg.reader_size as f32;
     let rtl = cfg.read_dir == ReadDir::Rtl;
-    let scroll = cfg.read_mode == ReadMode::Scroll;
+    let scroll = cfg.read_mode == ReadMode::Scroll && s.pdf.is_none();
     let cols: usize = if cfg.page_mode == PageMode::Double && !scroll {
         2
     } else {
         1
     };
-    let pct = if s.text.is_empty() {
-        0
-    } else {
-        s.pos * 100 / s.text.len()
-    };
+    let pct = s.percent();
 
     let header = row![
         button(if standalone {
@@ -457,6 +585,10 @@ pub fn view<'a>(s: &'a State, cfg: &Config, standalone: bool) -> Element<'a, Msg
                     .width(Length::Fill)
                     .height(Length::Fill)
                     .into();
+            }
+
+            if let Some(pdf) = &s.pdf {
+                return pdf_spread(s, pdf, size, cols, rtl);
             }
 
             let margin = 24.0_f32;

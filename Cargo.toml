@@ -6,7 +6,7 @@ license = "AGPL-3.0-or-later"
 description = "Light ebook library manager and reader"
 
 [dependencies]
-iced = "0.14"
+iced = { version = "0.14", features = ["image-without-codecs"] }
 rfd = "0.15"          # native folder dialog (uses xdg-desktop-portal -> KDE dialog)
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
@@ -14,6 +14,7 @@ dirs = "5"
 walkdir = "2"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 roxmltree = "0.21.2"
+hayro = "0.8.0"
 
 [profile.release]
 lto = "thin"
