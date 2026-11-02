@@ -149,7 +149,7 @@ fn is_pdf(path: &Path) -> bool {
 fn load_pdf(path: &Path) -> Result<Pdf, String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
     let pdf = Pdf::new(Arc::new(bytes)).map_err(|_| "Could not read this PDF".to_string())?;
-    if pdf.pages().len() == 0 {
+    if pdf.pages().is_empty() {
         return Err("This PDF has no pages".into());
     }
     Ok(pdf)
