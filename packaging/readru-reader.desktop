@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=readru Reader
+Name=Readru Reader
 GenericName=Ebook Reader
 Comment=Open a book in the standalone readru reader
 Exec=readru --reader %f

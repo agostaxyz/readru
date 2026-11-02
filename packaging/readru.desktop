@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=readru
+Name=Readru
 GenericName=Ebook Library
 Comment=Light ebook library and reader
 Exec=readru %f
